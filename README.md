@@ -1,2 +1,9 @@
 # TelomereChangeInDairyCattle
-This repo contains data and code discussed in Seeker et al. 2021, Scientific Reports
+This repo contains data and code discussed in Seeker et al. 2021, "Telomere attrition rates are associated with weather conditions and predict productive lifespan in dairy cattle", Scientific Reports. 
+
+Abstract
+
+Telomere length is predictive of adult health and survival across vertebrate species. However, we currently do not know whether such associations result from among-individual differences in telomere length determined genetically or by early-life environmental conditions, or from differences in the rate of telomere attrition over the course of life that might be affected by environmental conditions. Here, we measured relative leukocyte telomere length (RLTL) multiple times across the entire lifespan of dairy cattle in a research population that is closely monitored for health and milk production and where individuals are predominantly culled in response to health issues. Animals varied in their change in RLTL between subsequent measurements and RLTL shortened more during early life and following hotter summers which are known to cause heat stress in dairy cows. The average amount of telomere attrition calculated over multiple repeat samples of individuals predicted a shorter productive lifespan, suggesting a link between telomere loss and health. TL attrition was a better predictor of when an animal was culled than their average TL or the previously for this population reported significant TL at the age of 1 year. Our present results support the hypothesis that TL is a flexible trait that is affected by environmental factors and that telomere attrition is linked to animal health and survival traits. Change in telomere length may represent a useful biomarker in animal welfare studies.
+
+Full text available here: 
+https://www.nature.com/articles/s41598-021-84984-2
