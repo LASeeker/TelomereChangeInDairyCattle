@@ -1,0 +1,3333 @@
+---
+title: "Telomere attrition rates are associated with weather conditions and predict productive lifespan in dairy cattle"
+author: "Luise A. Seeker"
+date: "Thursday, March 01, 2021"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 4
+    theme: united
+---
+
+# PART 1: Introduction
+
+Below the analysis corresponding to the paper "Telomere attrition rates are 
+associated with weather conditions and predict productive lifespan in dairy 
+cattle" by Seeker et al. 2021 (Scientific Reports) can be found. 
+
+
+
+
+# PART 2: THE ANALYSIS
+
+# Load libraries
+
+```{r, echo - FALSE}
+
+library(ggplot2)
+library(nlme)
+library(lme4)
+library(lmerTest)
+library(grid)
+library(gridExtra)
+library(mgcv) # for GAM
+library(data.table)
+library(stringr)
+
+#library(magrittr)
+library(ggthemes)
+library(plyr)
+library(dplyr)
+library(survival)
+library(survminer)
+library(ggsci) # for colours
+library(here) # for reproducible file paths
+
+
+```
+
+# Build colour palettes
+
+```{r}
+# Make colour palette
+mypal <- pal_npg("nrc", alpha = 0.7)(10)
+mypal2 <-pal_tron("legacy", alpha = 0.7)(7)
+mypal3<-pal_lancet("lanonc", alpha = 0.7)(9)
+mypal4<-pal_simpsons(palette = c("springfield"), alpha = 0.7)(16)
+
+mycoloursP<- c(mypal, mypal2, mypal3, mypal4)
+
+```
+
+
+# Read in telomere data
+
+```{r}
+
+data <- read.csv(here::here("data", "LongTelomereDataCattle.csv")) 
+
+```
+
+
+# Checking for measurement error
+
+```{r}
+mean_year_change <- data.frame(mean_change_rate = 
+                                 tapply(as.numeric(paste(data$atrr_rate_per_year)), 
+                           data$recoded_id, mean, na.rm = TRUE))
+
+mean_year_change$recoded_id <- rownames(mean_year_change)
+
+data <- merge(data, mean_year_change, by = "recoded_id")
+
+
+
+
+mes_er<- ggplot(data, aes(x = as.numeric(paste(residual_rltl_tminus1)), 
+                                y = mean_change_rate,
+                 colour = AgeGroup)) + 
+  geom_point(size = 0.2)+
+  scale_color_manual(values=mycoloursP[16:40]) +
+  theme_classic() +
+  geom_abline(intercept = 0, slope = 0, colour = "red") +
+  stat_smooth(method = lm, formula = y ~ x) +
+  ylab("Mean yearly rate in RLTL change")+
+  xlab("Baseline RLTL")
+
+
+
+ mes_er
+```
+
+```{r}
+cor.test(as.numeric(paste(data$residual_rltl_tminus1)), data$mean_change_rate) 
+
+```
+
+# read in weather data
+
+Weather data was downloaded from the [metoffice homepage](https://www.metoffice.gov.uk/pub/data/weather/uk/climate/stationdata/eskdalemuirdata.txt) from the station in Eskdalemuir which is the closest accessible weather data station to Dumfries (21.8 miles or 35.1 km based on [freemaptools](https://www.freemaptools.com/how-far-is-it-between.htm)
+
+Text data was importet to Excel, where season and year summary statistics were added. Then the data was exported as .csv file. 
+
+"sample_year" in the weather data was coded so that it included the first three month of the calendar year in which samples were taken plus the last nine month of the previous calendar year. So the most recent data was collected in the first quartal (Q1) while Q4, Q3, Q2 go back in time in that order. This is done in this way, because samples are usually taken in March and therefore it makes most sense that a sampling year goes from April to March.
+
+```{r}
+weather<-read.csv(here::here("data", "eskdalemuirdata_red_sampleYear.csv")) 
+
+
+
+```
+
+## Merge telomere and weather data
+
+```{r}
+
+data <- merge(data, weather, by = "sample_year" )
+
+
+```
+
+
+# Prepare data
+
+To keep this document cleaner "createInputData.Rmd" was used to create different input dataframes in the format required for different analyses (for example a Cox- proportional hazard model needs different infromation to a linear mixed model).
+```{r}
+# create data which only lists each animal ID once (needed for some counts/ histograms below)
+uData <- data[!duplicated(data$recoded_id), ]
+
+# create data that excludes all first measurements without t-1 time point. This is used for investigations of change
+redData <- subset(data, data$residual_rltl_tminus1 != "NULL")
+
+init_change_dat <- read.csv(here::here("data", "first_year_long_tel_cattle.csv"))
+
+
+coxData <- read.csv(here::here("data", "cox_data.csv"))
+
+coxDataR <- subset(coxData, coxData$amp_305_lactation != "NULL")
+
+deadD <- subset(data, data$herd_life != "NULL")
+redDeadD <- subset(redData, redData$herd_life != "NULL")
+uDeadData <- redDeadD[!duplicated(redDeadD$recoded_id), ]
+
+# Data for repeating Cox proportional hazard model without without the fist measurement.
+
+
+red_data_l_new <- read.csv(here::here("data", "excluded_less_3_month.csv"))
+uniq_red_data_l_new <- red_data_l_new[!duplicated(red_data_l_new$recoded_id), ]
+
+
+# df with more than two measurements
+
+more_2 <- read.csv(here::here("data", "more_2_sampl.csv"))
+u_more_2 <- more_2[!duplicated(more_2$recoded_id), ]
+```
+
+
+
+# RLTL change and correlation of RLTL at t with RLTL at t-1
+```{r, fig.width= 10, fig.height= 3}
+cor.test(redData$residual_rltl_t, as.numeric(paste(redData$residual_rltl_tminus1)))
+
+SubsPlot <- ggplot(redData, aes(x = as.numeric(paste(residual_rltl_tminus1)), y = redData$residual_rltl_t)) +
+  geom_point() +
+  xlab("RLTL at time t-1") +
+  ylab("RLTL at time t") +
+  theme_classic(20) +
+  geom_abline(intercept = 0, slope = 1, colour = "red") +
+  stat_smooth(method = lm, formula = y ~ x) #+ annotate("text", x = -0.4, y = 0.5, label = "(B)", fontface =2, size = 10)
+
+
+agePlot <- ggplot(redData, aes(x = as.factor(redData$age_y), y = as.numeric(paste(redData$diff_rltl_res)), colour = as.factor(redData$age_y))) +
+  geom_jitter() +
+  theme_classic(20) +
+  xlab("Age in years") +
+  ylab("RLTL change") +
+  geom_boxplot() +
+  scale_color_manual(values = mycoloursP[16:40]) +
+  theme(legend.position = "none") #+ annotate("text", x = 1, y = 0.5, label = "(A)", fontface =2, size = 10) 
+
+grid.arrange(agePlot, SubsPlot, ncol = 2)
+```
+```{r}
+
+cor.test(redData$residual_rltl_t, as.numeric(paste(redData$residual_rltl_tminus1)))
+
+```
+
+
+
+
+
+# Kaplan-Meier plots
+
+```{r, echo = FALSE}
+# First initial change in telomere length within the first year of life
+
+cox_fit_init <- survfit(Surv(init_change_dat$TimeMeasure, 
+          init_change_dat$Event == 1) ~ init_change_dat$ResDiff_3G)
+
+summary(cox_fit_init)
+```
+
+```{r}
+coxFit_calf <- coxph(Surv(init_change_dat$TimeMeasure, 
+          init_change_dat$Event == 1)~init_change_dat$ResDiff_3G)
+
+
+```
+
+```{r}
+
+init_ch_plot<-ggsurvplot(cox_fit_init, data = init_change_dat,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Change",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[16:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days") 
+```
+
+
+# Then life-long average RLTL measures
+
+## mean RLTL 
+
+```{r}
+
+coxFit_meanRLTL_3G<-coxph(Surv(coxData$TimeMeasure, coxData$Event == 1)~coxData$average_resid_3G)
+
+summary(coxFit_meanRLTL_3G)
+
+```
+
+```{r}
+coxFit <- survfit(Surv(coxData$TimeMeasure, coxData$Event == 1)
+                  ~ coxData$average_resid_3G)
+```
+
+```{r}
+
+meanRLTL<-ggsurvplot(coxFit, data = coxData,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Length",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[5:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days")
+
+```
+
+
+## mean RLTL change
+
+```{r}
+coxFit<-survfit(Surv(coxData$TimeMeasure, coxData$Event == 1) ~
+                  coxData$rltl_change_3G)
+
+```
+
+```{r}
+
+coxFit_meanRLTL_CH_3G<-coxph(Surv(coxData$TimeMeasure, coxData$Event == 1)~coxData$rltl_change_3G)
+
+summary(coxFit_meanRLTL_CH_3G)
+
+```
+
+```{r}
+
+mean_rltl_change<-ggsurvplot(coxFit, data = coxData,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Change",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[10:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days")
+ 
+```
+
+
+
+## mean absolute RLTL change
+
+
+```{r}
+
+coxFit_meanRLTL_absCH_3G <- coxph(Surv(coxData$TimeMeasure, 
+    coxData$Event == 1) ~ coxData$abs_rltl_change_3G)
+
+summary(coxFit_meanRLTL_absCH_3G)
+
+```
+
+```{r}
+
+coxFit<-survfit(Surv(coxData$TimeMeasure, coxData$Event == 1)~coxData$abs_rltl_change_3G)
+
+mean_abs_rltl_change<-ggsurvplot(coxFit, data = coxData,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Abs change",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[35:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days")
+
+
+
+```
+
+```{r, fig.width=10, fig.height= 10}
+
+
+surv_plotlist<-list()
+surv_plotlist[[1]] <- init_ch_plot 
+surv_plotlist[[2]] <- mean_abs_rltl_change
+surv_plotlist[[3]] <- meanRLTL
+surv_plotlist[[4]] <- mean_rltl_change
+
+
+
+print(arrange_ggsurvplots(surv_plotlist, print = TRUE, ncol = 4, nrow = 2))
+
+
+
+meanRLTL
+
+```
+
+
+# Restrict analysis to animals that did not die due to accidents or herd management
+
+
+
+```{r}
+
+diseased <- subset(data, data$cull_category != "Herd management" &
+                         data$cull_category != "Accident" & 
+                         data$cull_category != "Reason unknown")
+
+
+
+diseased <- unique(diseased$recoded_id)
+length(diseased)
+ 
+diseased_surv <- subset(coxData, coxData$recoded_id %in% diseased)
+
+
+init_change_dat_restr <- subset(init_change_dat, 
+                                init_change_dat$recoded_id %in% diseased) 
+```
+
+
+## First initial change in telomere length within the first year of life
+
+Reason for culling restricted to disease-related conditions
+
+```{r}
+coxFit_calf_restr <- coxph(Surv(init_change_dat_restr$TimeMeasure, 
+          init_change_dat_restr$Event == 1) ~ init_change_dat_restr$ResDiff_3G)
+
+summary(coxFit_calf_restr)
+```
+
+```{r}
+cox_fit_init_restr <- survfit(Surv(init_change_dat_restr$TimeMeasure, 
+          init_change_dat_restr$Event == 1) ~ init_change_dat_restr$ResDiff_3G)
+
+summary(cox_fit_init_restr)
+```
+
+```{r}
+
+init_ch_plot_restr<-ggsurvplot(cox_fit_init_restr, data = init_change_dat_restr,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Change",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[16:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days") 
+
+# Then life-long average RLTL measures
+
+
+```
+
+
+
+## mean RLTL 
+Reason for culling restricted to disease-related conditions
+
+```{r}
+coxFit <- survfit(Surv(diseased_surv$TimeMeasure, 
+                       diseased_surv$Event == 1)
+                  ~ diseased_surv$average_resid_3G)
+```
+
+
+```{r}
+
+coxFit_meanRLTL_3G_restr<-coxph(Surv(diseased_surv$TimeMeasure, 
+                               diseased_surv$Event == 1) ~
+                            diseased_surv$average_resid_3G)
+
+summary(coxFit_meanRLTL_3G_restr)
+
+```
+
+
+```{r}
+
+meanRLTL_restr<-ggsurvplot(coxFit, data = diseased_surv,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Length",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[5:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days")
+
+
+```
+
+
+
+
+## mean RLTL change
+
+Reason for culling restricted to disease-related conditions
+
+```{r}
+coxFit<-survfit(Surv(diseased_surv$TimeMeasure, 
+                     diseased_surv$Event == 1) ~
+                  diseased_surv$rltl_change_3G)
+
+```
+
+```{r}
+
+coxFit_meanRLTL_CH_3G_restr <- 
+  coxph(Surv(diseased_surv$TimeMeasure, 
+             diseased_surv$Event == 1) ~ 
+          diseased_surv$rltl_change_3G)
+
+summary(coxFit_meanRLTL_CH_3G_restr)
+
+```
+
+```{r}
+
+mean_rltl_change_restr <- ggsurvplot(coxFit, data = diseased_surv,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Change",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[10:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days")
+ 
+``` 
+
+
+## mean absoluteRLTL change
+
+Reason for culling restricted to disease-related conditions
+
+```{r}
+
+coxFit_meanRLTL_absCH_3G_restr <- coxph(Surv(diseased_surv$TimeMeasure, 
+    diseased_surv$Event == 1) ~ 
+      diseased_surv$abs_rltl_change_3G)
+
+summary(coxFit_meanRLTL_absCH_3G_restr)
+
+```
+
+```{r}
+
+coxFit<-survfit(Surv(diseased_surv$TimeMeasure, 
+                      diseased_surv$Event == 1) ~
+                  diseased_surv$abs_rltl_change_3G)
+
+mean_abs_rltl_change_restr<-ggsurvplot(coxFit, data = diseased_surv,
+ surv.median.line = "hv", # Add medians survival
+
+ # Change legends: title & labels
+ legend.title = "Abs change",
+ legend.labs = c("Ter 1", "Ter 2", "Ter 3"),
+ 
+ # Add p-value and tervals
+ pval = TRUE,
+
+ conf.int = FALSE,
+ # Add risk table
+ risk.table = FALSE,
+ tables.height = 0.2,
+ tables.theme = theme_cleantable(),
+
+ # Color palettes. Use custom color: c("#E7B800", "#2E9FDF"),
+ # or brewer color (e.g.: "Dark2"), or ggsci color (e.g.: "jco")
+ palette = mycoloursP[35:40],
+ ggtheme = theme_classic()
+) + xlab("Time in days")
+
+
+
+```
+
+```{r, fig.width=10, fig.height= 5}
+
+init_ch_plot_restr 
+```
+
+```{r, fig.width=10, fig.height= 5}
+mean_abs_rltl_change_restr
+```
+
+```{r, fig.width=10, fig.height= 5}
+meanRLTL_restr
+```
+
+```{r, fig.width=10, fig.height= 5}
+mean_rltl_change_restr
+
+```
+
+
+
+
+# Distribution of number of samples per animal, RLTL residuls and change in RLTL (residuals)
+
+RLTL measures were previously corrected for qPCR plate and row because they have a known effect on our measurements. 
+```{r}
+
+hist1 <- ggplot(uData, aes(x = uData$SamplesPerAnimal)) +
+  geom_histogram(colour = "black", fill = mycoloursP[7], binwidth = 1) +
+  xlab("Number of samples per animal") +
+  geom_vline(xintercept = mean(as.numeric(paste(uData$SamplesPerAnimal))), colour = "red") +
+  theme_classic(20) +
+  scale_x_continuous(breaks = c(1:8)) #+ annotate("text", x = 1, y = 100, label = "(A)", fontface =2, size = 8) 
+
+hist1
+
+
+hist2 <- ggplot(data, aes(x = data$residual_rltl_t)) +
+  geom_histogram(colour = "black", fill = mycoloursP[8]) +
+  xlab("Adjusted RLTL") +
+  geom_vline(xintercept = mean(as.numeric(paste(data$residual_rltl_t))), colour = "red") +
+  # annotate("text", x = -0.4, y = 120, label = "(B)", fontface =2, size = 8)+
+  theme_classic(20) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 25 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(data, c(
+      mean = mean(data$residual_rltl_t), sd = sd(data$residual_rltl_t), n
+      = length(data$residual_rltl_t)
+    ))
+  )
+
+hist2
+
+nrow(redData)
+
+diff <- as.numeric(paste(redData$diff_rltl_res))
+
+hist3 <- ggplot(redData, aes(x = as.numeric(paste(redData$diff_rltl_res)))) +
+  geom_histogram(colour = "black", fill = mycoloursP[9]) +
+  xlab("Adjusted RLTL change") +
+  geom_vline(xintercept = mean(as.numeric(paste(redData$diff_rltl_res))), colour = "red") +
+  # annotate("text", x = -0.6, y = 95, label = "(C)", fontface =2, size= 8)+
+  theme_classic(20) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 23 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(redData, c(
+      mean = mean(as.numeric(paste(redData$diff_rltl_res))), sd = sd(as.numeric(paste(redData$diff_rltl_res))), n
+      = length(as.numeric(paste(redData$diff_rltl_res)))
+    ))
+  )
+
+hist3
+```
+
+
+```{r, fig.height = 3, fig.width=8}
+
+grid.arrange(hist1, hist3, ncol = 2)
+
+
+```
+
+
+```{r}
+hist2
+
+```
+
+##### Histogram of change in telomere length within the first year of life
+```{r}
+init_hist <- ggplot(init_change_dat, aes(x = init_change_dat$ResDiff)) +
+  geom_histogram(colour = "black", fill = mycoloursP[10]) +
+  xlab("Initial RLTL change") +
+  theme_classic(20) +
+  geom_vline(xintercept = mean(as.numeric(paste(init_change_dat$ResDiff))), colour = "red") +
+  # annotate("text", x = -0.6, y = 28, label = "(D)", fontface =2, size= 8) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 23 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(init_change_dat, c(
+      mean = mean(as.numeric(paste(init_change_dat$ResDiff))),
+      sd = sd(as.numeric(paste(init_change_dat$ResDiff))),
+      n = length(as.numeric(paste(init_change_dat$ResDiff)))
+    ))
+  )
+init_hist
+```
+##### Histogram of RLTL at birth
+
+```{r}
+init_rltl0_hist <- ggplot(init_change_dat, aes(x = init_change_dat$RLTL0)) +
+  geom_histogram(colour = "black", fill = mycoloursP[15]) +
+  xlab("RLTL at birth") +
+  theme_classic(20) +
+  geom_vline(xintercept = mean(as.numeric(paste(init_change_dat$RLTL0))), colour = "red") +
+  # annotate("text", x = -0.6, y = 28, label = "(D)", fontface =2, size= 8) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 23 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(init_change_dat, c(
+      mean = mean(as.numeric(paste(init_change_dat$RLTL0))),
+      sd = sd(as.numeric(paste(init_change_dat$RLTL0))),
+      n = length(as.numeric(paste(init_change_dat$RLTL0)))
+    ))
+  )
+init_rltl0_hist
+```
+
+
+
+
+```{r}
+init_rltl1_hist <- ggplot(init_change_dat, aes(x = init_change_dat$RLTL1)) +
+  geom_histogram(colour = "black", fill = mycoloursP[16]) +
+  xlab("RLTL at one year") +
+  theme_classic(20) +
+  geom_vline(xintercept = mean(as.numeric(paste(init_change_dat$RLTL1))), colour = "red") +
+  # annotate("text", x = -0.6, y = 28, label = "(D)", fontface =2, size= 8) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 23 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(init_change_dat, c(
+      mean = mean(as.numeric(paste(init_change_dat$RLTL1))),
+      sd = sd(as.numeric(paste(init_change_dat$RLTL1))),
+      n = length(as.numeric(paste(init_change_dat$RLTL1)))
+    ))
+  )
+init_rltl1_hist
+```
+
+```{r, fig.width = 6, fig.height = 2}
+grid.arrange(init_rltl0_hist, init_rltl1_hist, init_hist, ncol = 3)
+
+```
+
+#### Histogram of samples per animal after removing early measurements
+```{r}
+hist1b <- ggplot(u_more_2, aes(x = SamplesPerAnimal)) +
+  geom_histogram(colour = "black", fill = mycoloursP[11], binwidth = 1) +
+  xlab("Number of samples per animal") +
+  geom_vline(xintercept = mean(as.numeric(paste(u_more_2$SamplesPerAnimal)), na.rm = TRUE), colour = "red") +
+  annotate("text", x = 0.7, y = 100, label = "(E)", fontface = 2, size = 8) +
+  theme_classic(20) +
+  scale_x_continuous(breaks = c(1:8))
+
+# hist1b
+```
+
+
+For dataframe with more than 2 samples 
+```{r}
+hist2b <- ggplot(more_2, aes(x = more_2$residual_rltl_t)) +
+  geom_histogram(colour = "black", fill = mycoloursP[12]) +
+  xlab("Adjusted RLTL") +
+  geom_vline(xintercept = mean(as.numeric(paste(more_2$residual_rltl_t))), colour = "red") +
+  annotate("text", x = -0.4, y = 95, label = "(F)", fontface = 2, size = 8) +
+  theme_classic(20) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 27 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(more_2, c(
+      mean = mean(more_2$residual_rltl_t), sd = sd(more_2$residual_rltl_t), n
+      = length(more_2$residual_rltl_t)
+    ))
+  )
+
+# hist2b
+
+```
+
+```{r}
+
+nrow(more_2)
+
+
+hist3b <- ggplot(more_2, aes(x = as.numeric(paste(more_2$diff_rltl_res)))) +
+  geom_histogram(colour = "black", fill = mycoloursP[13]) +
+  xlab("Adjusted RLTL change") +
+  geom_vline(xintercept = mean(as.numeric(paste(more_2$diff_rltl_res))), colour = "red") +
+  annotate("text", x = -0.6, y = 95, label = "(G)", fontface = 2, size = 8) +
+  theme_classic(20) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n / 23 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(more_2, c(
+      mean = mean(as.numeric(paste(more_2$diff_rltl_res))), sd = sd(as.numeric(paste(more_2$diff_rltl_res))), n
+      = length(as.numeric(paste(more_2$diff_rltl_res)))
+    ))
+  )
+
+# hist3b
+
+```
+
+
+
+# Productive lifespan:
+
+```{r}
+variable <- as.numeric(paste(uDeadData$herd_life))
+# sqrt might improve normality test outcome slightly...
+
+meanHL <- mean(as.numeric(paste(uDeadData$herd_life)))
+
+
+prod_lsp_plot <- ggplot(uDeadData, aes(x = as.numeric(paste(uDeadData$herd_life)))) +
+  geom_histogram(colour = "black", fill = mycoloursP[14]) +
+  xlab("Productive lifespan in days") +
+  geom_vline(xintercept = mean(as.numeric(paste(uDeadData$herd_life))), colour = "red") +
+  # annotate("text", x = 10, y = 19, label = "(H)", fontface =2, size= 8) +
+  theme_classic(20) +
+  stat_function(
+    fun = function(x, mean, sd, n) {
+      n * 120 * dnorm(x = x, mean = mean, sd = sd)
+    },
+    args = with(uDeadData, c(
+      mean = mean(as.numeric(paste(uDeadData$herd_life))),
+      sd = sd(as.numeric(paste(uDeadData$herd_life))),
+      n = length(as.numeric(paste(uDeadData$herd_life)))
+    ))
+  )
+
+
+prod_lsp_plot
+
+```
+
+```{r, fig.width = 20, fig.height=15}
+
+
+
+grid.arrange(hist1, hist2, hist3, init_hist, hist1b, hist2b, hist3b, prod_lsp_plot,  ncol = 4)
+```
+
+
+
+
+
+# Statistical tests for normality
+
+RLTL length
+```{r}
+# statistical tests for normal distribution of RTL measurements
+shapiro.test(data$residual_rltl_t)
+ks.test(data$residual_rltl_t, pnorm)
+qqnorm(data$residual_rltl_t)
+
+```
+
+Adjusted RLTL change
+```{r}
+# statistical tests for normal distribution of RTL measurements
+shapiro.test(as.numeric(paste(data$diff_rltl_res)))
+ks.test(as.numeric(paste(data$diff_rltl_res)), pnorm)
+qqnorm(as.numeric(paste(data$diff_rltl_res)))
+
+```
+
+```{r}
+# statistical tests for normal distribution of difference in RTL residuals
+shapiro.test(as.numeric(paste(uDeadData$herd_life)))
+ks.test(as.numeric(paste(uDeadData$herd_life)), pnorm)
+qqnorm(as.numeric(paste(uDeadData$herd_life)))
+```
+
+
+```{r}
+# test if mean RLTL change is significantly different from zero:
+
+t.test(as.numeric(paste(redData$diff_rltl_res)), mu=0, alternative="less", conf.level=0.99)
+
+```
+
+# calculate sample number per animal
+
+```{r}
+count <- nrow(data)
+unique_count <- length(unique(data$recoded_id))
+sample_year_summ <- summary(as.factor(data$sample_year))
+
+print(paste("There are ", count, " relative leukocyte telomere length (RLTL) measurements of ", unique_count, " animals included in the study.", sep = ""))
+```
+
+# Distibution of sample years 
+```{r}
+sample_year_summ
+```
+
+Due to our sample routine, animals samples in 2008 all must be calves. This may have an impact on an investigation of the effect of sample year on change in RLTL.
+
+
+
+## Shortening and elongating:
+
+```{r}
+shortening <- subset(redData, as.numeric(paste(redData$diff_rltl_res)) < 0)
+elongating <- subset(redData, as.numeric(paste(redData$diff_rltl_res)) > 0)
+
+percent_shortening <- nrow(shortening) / nrow(redData) * 100
+percent_shortening
+
+percent_elongating <- nrow(elongating) / nrow(redData) * 100
+percent_elongating
+```
+
+# Calves
+
+```{r}
+
+cor.test(init_change_dat$ResDiff, init_change_dat$sample_interval)
+
+```
+
+
+```{r}
+
+samp_int <- ggplot(init_change_dat, aes(x = sample_interval, y = ResDiff)) +
+  geom_point()+
+  ylab("Change in RLTL")+
+  xlab("Sample Interval")+
+  theme_minimal()
+
+samp_int
+```
+
+In calves as well as in adults, the sample interval does not correlate with
+change in RLTL suggesting that changing rate differs. 
+
+
+# MIXED MODELS
+
+# Full model of RLTL change
+
+```{r}
+
+# There is only one second time point in the year 2009:
+summary(as.factor(redData$sample_year))
+nrow(redData)
+# this sample is therefore removed:
+
+redData <- subset(redData, redData$sample_year != 2009)
+nrow(redData)
+
+init_mod <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+            redData$age_y + 
+            redData$feed_group + 
+            redData$genetic_group+ as.factor(redData$birth_year) + 
+            as.factor(redData$sample_year) +  
+            as.numeric(paste(redData$sample_interval))+ 
+            redData$health_event_2week  + 
+            (1|redData$recoded_id), na.action=na.exclude)
+
+
+summary(init_mod)
+anova(init_mod)
+
+AIC(init_mod)
+
+# There is a warning that this model is singular which is due to the random effect variance structure. It means that the variance due to the animal ID is not significantly different from 0. Although this may be a problem for some models, I think in this case it is not. It simply means that there is no variation between animals in the RLTL change and that is to be expected here, because the variance within animals is much larger than the variance between animals. 
+
+# Sample year is statistically significant, but it might only be signifgicant due to the design of our study. Becasue we wanted to have repeat measurements for all animals with the first measurement taken with the first 15 days of life, sampling in the first year only included calves which have been shown before to have longer telomeres than adults and to shorten them in their first year of life. So is the year effect simply driven by that? If so, it should vanish after excluding samples taken within the two years
+
+
+init_mod_out <- as.data.frame(VarCorr(init_mod),comp = c("Variance", "Std.Dev."))
+repET <- init_mod_out[1,4]/sum(init_mod_out[1:nrow(init_mod_out),4])
+repET
+```
+
+#### Full model of RLTL change excluding first two years 
+```{r}
+summary(as.factor(data$sample_year))
+
+test_dat<-subset(data, data$sample_year != 2008)
+test_dat<-subset(test_dat, test_dat$sample_year != 2009)
+
+long_dat <- subset(test_dat, test_dat$diff_rltl_res != "NULL")
+
+late_mod <- lmer(as.numeric(paste(long_dat$diff_rltl_res)) ~ 
+                long_dat$age_y + 
+                long_dat$feed_group + 
+                long_dat$genetic_group + 
+                as.factor(long_dat$birth_year) + 
+                as.factor(long_dat$sample_year) +  
+                as.numeric(paste(long_dat$sample_interval)) + 
+                long_dat$health_event_2week +
+                (1|long_dat$recoded_id), 
+                na.action=na.exclude)
+
+
+
+
+summary(late_mod)
+anova(late_mod)
+
+AIC(late_mod)
+
+# sample year remains statistically significant. 
+
+
+
+```
+
+#### Reduced model of RLTL change
+
+```{r}
+
+red_mod <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+            redData$age_y + 
+            redData$feed_group + 
+            redData$genetic_group+ 
+            as.factor(redData$sample_year) +  
+            as.numeric(paste(redData$sample_interval)) + 
+            (1|redData$recoded_id), 
+            na.action=na.exclude)
+
+
+summary(red_mod)
+anova(red_mod)
+
+AIC(red_mod) 
+
+
+tableS3 <- as.data.frame(round(coef(summary(red_mod)),3))
+
+tableS3
+
+
+tableS4 <- as.data.frame(anova(red_mod))
+
+tableS4
+
+
+red_mod_out <- as.data.frame(VarCorr(red_mod),comp = c("Variance", "Std.Dev."))
+repET <- red_mod_out[1,4]/sum(red_mod_out[1:nrow(red_mod_out),4])
+repET
+```
+
+Absolute change
+```{r}
+
+red_mod_abs <- lmer(abs(as.numeric(paste(redData$diff_rltl_res))) ~ 
+            redData$age_y + 
+            redData$feed_group + 
+            redData$genetic_group+ 
+            as.factor(redData$sample_year) +  
+            as.numeric(paste(redData$sample_interval)) + 
+            (1|redData$recoded_id), 
+            na.action=na.exclude)
+
+
+summary(red_mod_abs)
+anova(red_mod_abs)
+
+AIC(red_mod_abs) 
+
+
+
+red_mod_abs_out <- as.data.frame(VarCorr(red_mod_abs),comp = c("Variance", "Std.Dev."))
+repET <- red_mod_abs_out[1,4]/sum(red_mod_abs_out[1:nrow(red_mod_abs_out),4])
+repET
+
+
+
+```
+
+
+#### Reduced model of RLTL change with age as two level factor
+
+```{r}
+
+red_mod_fac<-lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+      redData$AgeGroup + 
+      redData$feed_group + 
+      redData$genetic_group+ 
+      as.factor(redData$sample_year) +  
+      as.numeric(paste(redData$sample_interval)) + 
+      (1|redData$recoded_id), 
+      na.action=na.exclude)
+
+
+summary(red_mod_fac)
+anova(red_mod_fac)
+
+AIC(red_mod_fac)
+
+anova(red_mod, red_mod_fac)
+
+```
+
+
+
+### Effect of milk productivity on RLTL change
+
+
+
+#### Model of telomere change including milk productivity
+```{r}
+
+#t test with average productivity in the model for animals that have productivity measurements:
+
+PData <- subset(redData, redData$amp_305_lactation != "NULL")
+nrow(PData)
+length(unique(PData$recoded_id))
+
+rescaled_prod <- as.numeric(paste(PData$amp_305_lactation))/1000
+# milk productivity measures are on a completely differenc scale and are therefore re-scaled by dividing them by 1000
+
+prod_mod <- lmer(as.numeric(paste(PData$diff_rltl_res)) ~ 
+            PData$age_y + 
+            PData$feed_group + 
+            PData$genetic_group +  
+            as.factor(PData$sample_year) + 
+            as.numeric(paste(PData$sample_interval)) + 
+            rescaled_prod + 
+            (1|PData$recoded_id), 
+            na.action=na.exclude)
+
+summary(prod_mod)
+anova(prod_mod)
+
+
+tableS5 <- as.data.frame(round(coef(summary(prod_mod)),3))
+
+tableS5
+
+
+tableS6 <- as.data.frame(anova(prod_mod))
+
+tableS6
+```
+
+# WEATHER DATA
+
+One factor that may influence telomere length dynamics in dairy cattle and explain yearly variation in telomere length attrition is weather. Previously, harsher weather has been shown to correlate with more telomere length attrition in the bat species *Myotis myotis* (REFS). Also, yearly effects on telomere length that may indicate environmental factors such as weather have been observed in Soay sheep and European badgers (REFS). In two cross-sectional studies, black bears that live at a higher altitude (and therefore colder climate) were shown to have shorter telomeres and similarly Roe deer living in a harsher habitat had shorter telomeres than those animals in an habitat with milder weather and better food resources. 
+Dairy cattle nowadays are often kept in stables that provide a roof to keep the animals dry, but are open on the sides to allow free air circulation. Dairy cattle are metabolically so active, that they feel most comfortable at temperatures at around 15 degrees celsius. They struggle more with too hot temperatures than too cold ones. All animals at Crichton are kept indoors during the winter, but the high forage feeding group is turned out for grazing over the summer months. Therefore, this group is more exposed to weather such as precipitation. Weather may also indirectly influence telomere length in dairy cattle by having an impact on food quality which ay vary from year to year. 
+
+
+Weather data was obtained from the metoffice weather station in [Eskdalemuir](https://www.metoffice.gov.uk/pub/data/weather/uk/climate/stationdata/eskdalemuirdata.txt) (Location 323400E 602600N, Lat 55.311 Lon -3.206, 242m amsl) on the 3rd of August 2020. Eskdakenuir is with 21.8 miles (35.1 km) direct distance (calculated with [freemaptools](https://www.freemaptools.com/how-far-is-it-between.htm)) the closest weather station to the farm in Dumfries. Weather data included maximum temperature, minimum temperature, days of air frost, total rain in mm and total sun hours for each recoreded month. Data was reduced to the years of interest between 2006 and 2015 and summarised to maximise its relevance considering the sampling interval on the farm to quarterly and yearly statistics in the following way: Routine blood sampling was performed in March and therefore the calendar year was divided into quartals and then allocated to a "sample year" which ran from April the previous year to end of March of the year when the blood samples were taken. By doing this sampling intervals for weather and telomere data was synchronised. 
+
+
+## Weather data in calves
+
+The dataset that was used above to investigate initial change in telomere lenght within the first year of life, one sample was taken shortly after birth and a second close to the age of one year. The sampling interval for those animals was the most consistant and therefore used to test the hypothesis that environmental factors such as weather may add to the variation in telomere length dynamics during the majour growth phase of the animals. 
+
+```{r}
+init_weath<-merge(init_change_dat, weather, by ="sample_year")
+
+levels(as.factor(init_change_dat$sample_year))
+
+year_mod <- lmer(as.numeric(paste(init_weath$ResDiff)) ~  
+              as.factor(init_change_dat$sample_year) + 
+              init_change_dat$TimeMeasure +
+              (1|init_weath$recoded_id), 
+              na.action=na.exclude)
+
+summary(year_mod)
+anova(year_mod)
+
+
+w1 <- ggplot(init_weath, 
+              aes(x=maxT_Q2 , y = as.numeric(paste(init_weath$ResDiff)))) + 
+              geom_point(colour = mycoloursP[6]) + 
+              xlab("Max summer temperature °C") + 
+              ylab("Change in RLTL") + 
+              geom_smooth(method = lm) + 
+              theme_bw(15)
+```
+
+
+Change in telomere length calves seems to be not significantly associated with sample year so it is difficult to argue for an effect of weather on change in RLTL length in early life. Other environmental stressors may have a larger impact or genetics may drive this effect. Maybe the sampling intervals are not consistant enogough? 
+
+Intitial change data
+
+```{r}
+
+plot_data<- init_change_dat
+
+plot_data$S_date0 <-as.Date(plot_data$S_date0, "%d/%m/%Y") 
+plot_data$S_date1 <-as.Date(plot_data$S_date1, "%d/%m/%Y") 
+
+plot_data1 <- data.frame(sample_date = plot_data$S_date0, 
+                        recoded_id = as.factor(paste(plot_data$recoded_id)))
+plot_data2 <- data.frame(sample_date = plot_data$S_date1, 
+                        recoded_id = as.factor(paste(plot_data$recoded_id)))
+
+plot_data <- rbind(plot_data1, plot_data2)
+
+
+
+```
+
+```{r, fig.height= 14, fig.width= 3}
+
+ggplot(plot_data, aes(sample_date, recoded_id, colour = recoded_id)) + 
+  geom_line(size = 2) +
+  xlab("") + ylab("") +
+  theme_classic() +  theme(legend.position="none")
+
+
+```
+
+To better visualise sampling intervals for calves, the first 50 individuals 
+(which are in randm order, because dummy IDs were given randomly) are 
+visualised.
+
+```{r, fig.height= 3, fig.width= 8}
+subboul <- plot_data$recoded_id[1:50]
+
+sub50 <- subset(plot_data, plot_data$recoded_id %in% subboul)
+
+
+ggplot(sub50, aes(sample_date, recoded_id, colour = recoded_id)) + 
+  geom_line(size = 2) +
+  xlab("Sample Interval") + ylab("Calf ID") +
+  theme_classic() +  theme(legend.position="none")
+  
+
+
+```
+
+## Weather data in adults
+### Yearly measures
+```{r}
+# max T per year
+yTmax_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                    redData$age_y + 
+                    redData$feed_group + 
+                    redData$genetic_group +
+                    as.numeric(paste(redData$sample_interval)) + 
+                    redData$sampleYear_maxT + 
+                    (1|redData$recoded_id), 
+                    na.action=na.exclude)
+
+
+summary(yTmax_mod_1)
+anova(yTmax_mod_1)
+
+AIC(yTmax_mod_1)
+
+# min T per year
+yTmin_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                    redData$age_y + 
+                    redData$feed_group + 
+                    redData$genetic_group + 
+                    as.numeric(paste(redData$sample_interval)) + 
+                    redData$year_minT +
+                    (1|redData$recoded_id), 
+                    na.action=na.exclude)
+
+
+summary(yTmin_mod_1)
+anova(yTmin_mod_1)
+
+AIC(yTmin_mod_1)
+
+#mean days of air frost per year
+
+ymAF_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                    redData$age_y + 
+                    redData$feed_group + 
+                    redData$genetic_group +
+                    as.numeric(paste(redData$sample_interval)) + 
+                    redData$sampleYear_af_days_mean +
+                    (1|redData$recoded_id), 
+                    na.action=na.exclude)
+
+
+summary(ymAF_mod_1)
+anova(ymAF_mod_1)
+
+AIC(ymAF_mod_1)
+
+
+#max sun hours/month per year
+#(n.s.)
+yMaxSH_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                      redData$age_y + 
+                      redData$feed_group + 
+                      redData$genetic_group + 
+                      as.numeric(paste(redData$sample_interval)) + 
+                      redData$sampleYear_sun_hours_max +
+                      (1|redData$recoded_id), 
+                      na.action=na.exclude)
+
+
+summary(yMaxSH_mod_1)
+anova(yMaxSH_mod_1)
+
+AIC(yMaxSH_mod_1)
+
+#mean precipitation per year
+#(n.s.)
+y_rain <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group +
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$sampleYear_mean_rain +
+                (1|redData$recoded_id), 
+                na.action=na.exclude)
+
+
+summary(y_rain)
+anova(y_rain)
+
+AIC(y_rain)
+
+```
+
+### Quartarly measures 
+
+max temperature
+
+```{r, fig.height= 4, fig.width= 8}
+#maxT spring
+#
+yMaxSH_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                      redData$age_y + 
+                      redData$feed_group + 
+                      redData$genetic_group + 
+                      as.numeric(paste(redData$sample_interval)) + 
+                      redData$maxT_Q1 +
+                      (1|redData$recoded_id), 
+                      na.action=na.exclude)
+
+
+summary(yMaxSH_mod_1)
+anova(yMaxSH_mod_1)
+
+AIC(yMaxSH_mod_1)
+
+#maxT summer
+#(s!)
+yMaxSuH_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                      redData$age_y + 
+                      redData$feed_group + 
+                      redData$genetic_group + 
+                      as.numeric(paste(redData$sample_interval)) + 
+                      redData$maxT_Q2 +
+                      (1|redData$recoded_id), 
+                      na.action=na.exclude)
+
+
+summary(yMaxSuH_mod_1)
+anova(yMaxSuH_mod_1)
+
+AIC(yMaxSuH_mod_1)
+
+w2 <- ggplot(redData, 
+            aes(x=maxT_Q2 , y = as.numeric(paste(redData$diff_rltl_res)))) +
+            geom_point(colour = mycoloursP[6]) +
+            xlab("Max summer temperature in °C") + 
+            ylab("Change in RLTL") + 
+            geom_smooth(method = lm) + 
+            theme_bw(15)
+
+grid.arrange(w1, w2, ncol = 2)
+
+#first plot is relationship between summer temperature and RLTL change in calves, second in adults. 
+
+
+
+```
+
+
+
+
+
+
+```{r}
+sam_year<- as.factor(redData$sample_year)
+tel_change<-as.numeric(paste(redData$diff_rltl_res))
+
+ggplot(redData, aes(x=maxT_Q2, y = tel_change)) + 
+                xlab("Max summer temperature in °C") + 
+                ylab("Change in RLTL")  + theme_bw(15) + 
+                geom_point(colour = sam_year) + 
+                scale_colour_manual(values = mycoloursP) + 
+                geom_smooth(method = lm, formula = y~x)
+
+
+fig2 <- ggplot(redData, aes(x=maxT_Q2, y = tel_change)) + 
+                xlab("Max summer temperature in °C") + 
+                ylab("Change in RLTL")  + 
+                theme_bw(15) + 
+                geom_point(aes(colour = sam_year)) + 
+                scale_colour_manual(values = mycoloursP) + 
+                geom_smooth(method = lm, formula = y~x)
+
+
+fig2
+```
+
+
+
+
+```{r}
+tableS8 <- as.data.frame(round(coef(summary(yMaxSuH_mod_1)),3))
+
+tableS8
+```
+
+```{r}
+
+tableS9 <- as.data.frame(anova(yMaxSuH_mod_1))
+
+tableS9
+```
+
+```{r}
+
+### does sample year remain significant with max temp in the model?
+yMaxSuH_year <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                      redData$age_y + 
+                      redData$feed_group + 
+                      redData$genetic_group +
+                      as.numeric(paste(redData$sample_interval)) + 
+                      redData$sample_year + 
+                      redData$maxT_Q2 +
+                      (1|redData$recoded_id), 
+                      na.action=na.exclude)
+
+
+summary(yMaxSuH_year)
+anova(yMaxSuH_year)
+
+AIC(yMaxSuH_year)
+
+
+tableS10<-as.data.frame(round(coef(summary(yMaxSuH_year)),3))
+
+tableS10
+
+```
+
+
+```{r}
+
+tableS11<-as.data.frame(anova(yMaxSuH_year))
+
+tableS11
+
+
+### no sample year becomes nor significant, but max temp in summer remains significant
+
+#maxT autumn
+#(n.s.)
+yMaxAH_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                      redData$age_y + 
+                      redData$feed_group + 
+                      redData$genetic_group + 
+                      as.numeric(paste(redData$sample_interval)) + 
+                      redData$maxT_Q3 +
+                      (1|redData$recoded_id), 
+                      na.action=na.exclude)
+
+
+summary(yMaxAH_mod_1)
+anova(yMaxAH_mod_1)
+
+AIC(yMaxAH_mod_1)
+
+#maxT winter
+#(n.s.)
+yMaxW_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$maxT_Q4 +
+                (1|redData$recoded_id), 
+                na.action=na.exclude)
+
+
+summary(yMaxW_mod_1)
+anova(yMaxW_mod_1)
+
+AIC(yMaxW_mod_1)
+
+
+
+tableS12 <- as.data.frame(round(coef(summary(yMaxW_mod_1)),3))
+
+tableS12
+
+```
+
+
+```{r}
+
+tableS13 <- as.data.frame(anova(yMaxW_mod_1))
+
+tableS13
+```
+
+```{r}
+
+# max T of summer and winter quarter in the same model
+yMaxSW_mod_1 <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                      redData$age_y + 
+                      redData$feed_group + 
+                      redData$genetic_group + 
+                      as.numeric(paste(redData$sample_interval)) + 
+                      redData$maxT_Q4 + 
+                      redData$maxT_Q2 + 
+                      (1|redData$recoded_id), 
+                      na.action=na.exclude)
+
+summary(yMaxSW_mod_1)
+anova(yMaxSW_mod_1)
+
+AIC(yMaxSW_mod_1)
+
+tableS14 <- as.data.frame(round(coef(summary(yMaxSW_mod_1)),3))
+
+tableS14
+```
+
+```{r}
+tableS15 <- as.data.frame(anova(yMaxSW_mod_1))
+
+tableS15
+
+```
+
+
+```{r}
+# same as above plus sample year
+
+yMaxSW_year <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                    redData$age_y + 
+                    redData$feed_group + 
+                    redData$genetic_group + 
+                    as.numeric(paste(redData$sample_interval)) + 
+                    redData$maxT_Q4 + 
+                    redData$maxT_Q2 + 
+                    redData$sample_year + 
+                    (1|redData$recoded_id), na.action=na.exclude)
+
+summary(yMaxSW_year)
+anova(yMaxSW_year)
+
+AIC(yMaxSW_year)
+
+```
+
+min temperature
+```{r}
+#minT spring 
+
+min_t_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                  redData$age_y + 
+                  redData$feed_group + 
+                  redData$genetic_group + 
+                  as.numeric(paste(redData$sample_interval)) + 
+                  redData$minT_Q1 + 
+                  (1|redData$recoded_id), 
+                  na.action=na.exclude)
+
+
+summary(min_t_sp)
+anova(min_t_sp)
+
+AIC(min_t_sp)
+
+#summer
+min_t_su <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$minT_Q2 +
+                (1|redData$recoded_id), 
+                na.action=na.exclude)
+
+
+summary(min_t_su)
+anova(min_t_su)
+
+AIC(min_t_su)
+
+#autumn
+min_t_au <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$minT_Q3 +
+                (1|redData$recoded_id), 
+                na.action=na.exclude)
+
+
+summary(min_t_au)
+anova(min_t_au)
+
+AIC(min_t_au)
+
+tableS16 <- as.data.frame(round(coef(summary(min_t_au)),3))
+
+tableS16
+
+tableS17 <- as.data.frame(anova(min_t_au))
+
+tableS17
+
+
+# min autumn & max summer
+min_t_au_max_su <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                  redData$age_y + 
+                  redData$feed_group + 
+                  redData$genetic_group + 
+                  as.numeric(paste(redData$sample_interval)) + 
+                  redData$minT_Q3 + 
+                  redData$maxT_Q2 +
+                  (1|redData$recoded_id), 
+                  na.action=na.exclude)
+
+
+summary(min_t_au_max_su)
+anova(min_t_au_max_su)
+
+AIC(min_t_au_max_su)
+
+tableS18<-as.data.frame(round(coef(summary(min_t_au_max_su)),3))
+
+tableS18
+
+tableS19<-as.data.frame(anova(min_t_au_max_su))
+
+tableS19
+
+
+
+#winter
+min_t_wi <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                  redData$age_y + 
+                  redData$feed_group + 
+                  redData$genetic_group + 
+                  as.numeric(paste(redData$sample_interval)) + 
+                  redData$minT_Q4 + 
+                  (1 | redData$recoded_id), 
+                  na.action = na.exclude)
+
+
+summary(min_t_wi)
+anova(min_t_wi)
+
+AIC(min_t_wi)
+
+```
+
+
+mean rain
+
+```{r}
+# spring 
+
+r_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_rain_Q1 + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+
+summary(r_sp)
+anova(r_sp)
+
+AIC(r_sp)
+
+# summer
+r_su <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_rain_Q2 + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+
+summary(r_su)
+anova(r_su)
+
+AIC(r_su)
+
+tableS20 <- as.data.frame(round(coef(summary(r_su)), 3))
+
+tableS20
+
+tableS21 <- as.data.frame(anova(r_su))
+
+tableS21
+
+
+
+# autumn
+r_au <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_rain_Q3 + 
+              (1 | redData$recoded_id), na.action = na.exclude)
+
+
+summary(r_au)
+anova(r_au)
+
+AIC(r_au)
+
+# winter
+r_wi <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_rain_Q4 + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+
+summary(r_wi)
+anova(r_wi)
+
+AIC(r_wi)
+
+```
+Mean sun hours
+
+```{r}
+# spring
+
+sh_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_sun_hours_Q1 + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+
+summary(sh_sp)
+anova(sh_sp)
+
+AIC(sh_sp)
+
+# summer
+sh_su <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$mean_sun_hours_Q2 + 
+                (1 | redData$recoded_id), 
+                na.action = na.exclude)
+
+
+summary(sh_su)
+anova(sh_su)
+
+AIC(sh_su)
+
+tableS22 <- as.data.frame(round(coef(summary(sh_su)), 3))
+
+tableS22
+```
+
+```{r}
+tableS23 <- as.data.frame(anova(sh_su))
+
+tableS23
+```
+
+```{r}
+
+# autumn
+sh_au <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_sun_hours_Q3 + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+
+summary(sh_au)
+anova(sh_au)
+
+AIC(sh_au)
+
+# winter
+sh_wi <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              redData$age_y + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$mean_sun_hours_Q4 + 
+              (1 | redData$recoded_id), na.action = na.exclude)
+
+
+summary(sh_wi)
+anova(sh_wi)
+
+AIC(sh_wi)
+
+```
+
+Air Frost
+
+```{r}
+# spring
+
+sp_af_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                  redData$age_y + 
+                  redData$feed_group + 
+                  redData$genetic_group + 
+                  as.numeric(paste(redData$sample_interval)) + 
+                  redData$sum_airFrost_days_Q1 + 
+                  (1 | redData$recoded_id), na.action = na.exclude)
+
+
+summary(sp_af_sp)
+anova(sp_af_sp)
+
+AIC(sp_af_sp)
+
+# summer
+su_af_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$sum_airFrost_days_Q2 + 
+                (1 | redData$recoded_id), 
+                na.action = na.exclude)
+
+
+summary(su_af_sp)
+anova(su_af_sp)
+
+AIC(su_af_sp)
+
+# autumn
+au_af_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                  redData$age_y + 
+                  redData$feed_group + 
+                  redData$genetic_group + 
+                  as.numeric(paste(redData$sample_interval)) + 
+                  redData$sum_airFrost_days_Q3 + 
+                  (1 | redData$recoded_id), 
+                  na.action = na.exclude)
+
+
+summary(au_af_sp)
+anova(au_af_sp)
+
+AIC(au_af_sp)
+
+tableS24 <- as.data.frame(round(coef(summary(au_af_sp)), 3))
+
+tableS24
+
+tableS25 <- as.data.frame(anova(au_af_sp))
+
+tableS25
+
+
+# winter
+wi_af_sp <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                redData$age_y + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$sum_airFrost_days_Q4 + 
+                (1 | redData$recoded_id), 
+                na.action = na.exclude)
+
+
+summary(wi_af_sp)
+anova(wi_af_sp)
+
+AIC(wi_af_sp)
+
+```
+
+
+
+##### Statistical normality tests
+```{r}
+shapiro.test(init_change_dat$ResDiff)
+ks.test(init_change_dat$ResDiff, pnorm)
+qqnorm(init_change_dat$ResDiff)
+```
+
+
+##### Cox-proportional hazard model of productive lifespan 
+```{r}
+coxFit <- coxph(Surv(as.numeric(paste(init_change_dat$TimeMeasure)), 
+                      init_change_dat$Event == 1) ~ init_change_dat$ResDiff)
+
+summary(coxFit)
+
+```
+
+##### change telomere change measure to discrete scale to allow for plotting
+
+```{r, fig.width = 3, fig.height= 3}
+tert_p_1 <- ggplot(
+  init_change_dat,
+  aes(
+    x = as.factor(init_change_dat$ResDiff_3G),
+    y = init_change_dat$ResDiff,
+    colour = as.factor(init_change_dat$ResDiff_3G)
+  )
+) +
+  geom_boxplot() +
+  xlab("RLTL change tertiles") +
+  ylab("RLTL change") +
+  theme_classic(20) +
+  geom_jitter() +
+  scale_color_manual(values = mycoloursP[16:40]) +
+  theme(legend.position = "none")
+
+tert_p_1
+```
+
+```{r, fig.width = 3, fig.height= 3}
+
+init_ch_plot
+```
+
+
+
+
+##### Cox proportional hazard model on discrete scale change measurements
+```{r}
+
+coxFit <- coxph(Surv(init_change_dat$TimeMeasure, 
+                init_change_dat$Event == 1) ~ 
+                init_change_dat$ResDiff_3G)
+
+summary(coxFit)
+
+
+
+
+```
+
+
+
+
+
+#### Individual longitudinal RLTL data of animals with more than seven measurements
+
+```{r}
+spaghettiData <- read.csv(here::here("data", "RC_SpaghettiData.csv"))
+                          
+                          
+
+spaghettiData$recoded_id <- as.factor(paste(spaghettiData$recoded_id))
+
+ggplot(data = spaghettiData, aes(
+  x = age_y,
+  y = residual_rltl_t,
+  group = recoded_id,
+  colour = recoded_id
+)) +
+  geom_point() +
+  geom_line() +
+  facet_wrap(. ~ recoded_id, ncol = 5) +
+  xlab("Age in years") +
+  ylab("RLTL residuals") +
+  theme_bw() +
+  scale_color_manual(values = mycoloursP[16:40])
+
+```
+
+
+
+```{r}
+year_p <- ggplot(
+  data = data,
+  aes(
+    x = sample_year,
+    y = residual_rltl_t,
+    group = recoded_id,
+    colour = as.factor(data$recoded_id)
+  )
+) +
+  geom_point() +
+  geom_line() +
+  xlab("Sample Year") +
+  ylab("RLTL residuals") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+
+
+
+```
+
+```{r}
+
+age_p <- ggplot(
+  data = data,
+  aes(
+    x = age_y,
+    y = residual_rltl_t,
+    group = recoded_id,
+    colour = as.factor(data$recoded_id)
+  )
+) +
+  geom_point() +
+  geom_line() +
+  xlab("Age in years") +
+  ylab("RLTL residuals") +
+  theme_classic() +
+  theme(legend.position = "none")
+
+```
+
+
+```{r, fig.width = 6, fig.height = 2}
+
+grid.arrange(age_p, year_p, ncol = 2)
+
+```
+
+
+
+```{r}
+# average_resid rltl_change  abs_rltl_change MeanChangeRate MeanChangeRateAbs
+
+
+
+# 1)
+x <- 15
+
+AverRes <- uDeadData$average_resid
+chF <- uDeadData$rltl_change
+
+df1 <- data.frame(AverRes, chF)
+
+
+cor.test(AverRes, chF)
+
+CorP1 <- ggplot(df1, aes(x = AverRes, y = chF)) +
+  geom_point(size = 2) +
+  labs(x = "Mean RLTL", y = "Mean RLTL change") +
+  stat_smooth(method = lm, formula = y ~ x) +
+  theme_bw(x)
+# CorP1
+
+```
+
+
+```{r, fig.width= 6, fig.height=2.5}
+
+# 2)
+AchF <- uDeadData$abs_rltl_change
+
+df2 <- data.frame(AverRes, AchF)
+
+
+cor.test(AverRes, AchF)
+
+CorP2 <- ggplot(df2, aes(x = AverRes, y = AchF)) +
+  geom_point(size = 2) +
+  labs(x = "Mean RLTL", y = "Mean absolute RLTL change") +
+  stat_smooth(method = lm, formula = y ~ x) +
+  theme_bw(x)
+CorP2
+
+
+# 5)
+
+df5 <- data.frame(chF, AchF)
+
+cor.test(chF, AchF)
+
+CorP5 <- ggplot(df5, aes(x = chF, y = AchF)) +
+  geom_point(size = 2) +
+  labs(x = "Mean RLTL change", y = "Mean absolute RLTL change") +
+  theme_bw(x) +
+  stat_smooth(method = lm, formula = y ~ x) +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_abline(intercept = 0, slope = -1, colour = "red") +
+  geom_abline(intercept = 0, slope = 1, colour = "blue")
+# CorP5
+
+
+
+grid.arrange(CorP1, CorP2, CorP5, ncol = 3)
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+# Re-level age in years
+
+Age with reference year 0
+
+```{r}
+
+# Age in years as factor with reference year being 0 (Age at t-1)
+mod1f <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              as.factor(redData$age_y) + 
+              redData$sample_year + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+
+
+
+```
+
+
+Log likelihod ratio test to see if animal is significant as random effect
+
+
+```{r}
+redData$R_age_y <- as.factor(redData$age_y)
+
+# lm without random effect to do likelihood ratio test
+
+modLM <- glm(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              as.factor(redData$age_y) + 
+              redData$sample_year + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$feed_group + 
+              redData$genetic_group)
+
+anova(mod1f, modLM)
+
+logLik(mod1f)
+logLik(modLM)
+
+```
+
+
+Animal ID is not significant as random effect. 
+
+```{r}
+
+# Age in years as factor with reference year being 1 (Age at t-1)
+
+redData$age_y <- as.factor(redData$age_y)
+contrasts(redData$age_y) <- contr.treatment(levels(redData$age_y), 
+                                base = which(levels(redData$age_y) == "1"))
+
+mod1f <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              as.factor(redData$age_y) + 
+              redData$sample_year + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+```
+
+```{r}
+
+# Age in years as factor with reference year being 1 (Age at t-1)
+
+redData$age_y <- as.factor(redData$age_y)
+contrasts(redData$age_y) <- contr.treatment(levels(redData$age_y), 
+                                base = which(levels(redData$age_y) == "1"))
+
+mod2f <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              as.factor(redData$age_y) + 
+              #redData$sample_year + 
+              #as.numeric(paste(redData$sample_interval)) + 
+              (1 | redData$recoded_id), 
+              na.action = na.exclude)
+
+summary(mod2f)
+anova(mod2f)
+```
+
+
+```{r}
+exclude2009 <- subset(redData, redData$sample_year != "2009")
+
+mod1f <- lmer(as.numeric(paste(exclude2009$diff_rltl_res)) ~
+as.factor(exclude2009$age_y) +
+  exclude2009$sample_year +
+  as.numeric(paste(exclude2009$sample_interval)) +
+  exclude2009$feed_group +
+  exclude2009$genetic_group +
+  (1 | exclude2009$recoded_id), na.action = na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+```
+
+
+```{r}
+
+df<-as.data.frame(round(coef(summary(mod1f)),3))
+df
+
+
+```
+
+```{r}
+#Age in years as factor with reference year being 2 (Age at t-1)
+contrasts(redData$R_age_y) <- contr.treatment(levels(redData$R_age_y), 
+                              base=which(levels(redData$R_age_y) == '2'))
+
+mod1f<-lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                as.factor(redData$age_y) + 
+                redData$sample_year + 
+                as.numeric(paste(redData$sample_interval)) + 
+                redData$feed_group + 
+                redData$genetic_group + 
+                (1|redData$recoded_id), na.action=na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+
+#Age in years as factor with reference year being 3 (Age at t-1)
+contrasts(redData$R_age_y) <- contr.treatment(levels(redData$R_age_y), 
+                              base=which(levels(redData$R_age_y) == '3'))
+
+mod1f <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              as.factor(redData$age_y) + 
+              redData$sample_year + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              (1|redData$recoded_id), 
+              na.action=na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+
+#Age in years as factor with reference year being 4 (Age at t-1)
+contrasts(redData$R_age_y) <- contr.treatment(levels(redData$R_age_y), 
+                                base=which(levels(redData$R_age_y) == '4'))
+
+mod1f <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+                  as.factor(redData$age_y) + 
+                  redData$sample_year + 
+                  as.numeric(paste(redData$sample_interval)) + 
+                  redData$feed_group + 
+                  redData$genetic_group + 
+                  (1|redData$recoded_id), na.action=na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+
+#Age in years as factor with reference year being 5 (Age at t-1)
+contrasts(redData$R_age_y) <- contr.treatment(levels(redData$R_age_y), 
+                                base=which(levels(redData$R_age_y) == '5'))
+
+mod1f <- lmer(as.numeric(paste(redData$diff_rltl_res)) ~ 
+              as.factor(redData$age_y) + 
+              redData$sample_year + 
+              as.numeric(paste(redData$sample_interval)) + 
+              redData$feed_group + 
+              redData$genetic_group + 
+              (1|redData$recoded_id), na.action=na.exclude)
+
+summary(mod1f)
+anova(mod1f)
+
+
+
+nrow(subset(redData, redData$age_y == 6))
+
+```
+
+
+
+# Alternative approach to investigate change in RLTL 
+
+In a lot pf publications RLTL change is investigated by fitting a model of RLTL at time t and with RLTL at time t-1 as covariate. This is different to looking at RLTL change and fitting RLTL at the first time point as covariate which is problematic due to statistical problems that happen due to regression to the mean. 
+
+
+
+```{r}
+mod1 <- lmer(as.numeric(paste(redData$residual_rltl_t)) ~ 
+          as.numeric(paste(redData$residual_rltl_tminus1)) + 
+          as.factor(redData$age_y) + 
+          redData$sample_year + 
+          as.numeric(paste(redData$sample_interval)) + 
+          redData$feed_group + 
+          redData$genetic_group + 
+          (1|redData$recoded_id), na.action=na.exclude)
+
+summary(mod1)
+anova(mod1)
+
+
+
+
+```
+
+Reduce model by removinf non-significant effects. 
+```{r}
+mod1 <- lmer(as.numeric(paste(redData$residual_rltl_t)) ~ 
+          as.numeric(paste(redData$residual_rltl_tminus1)) + 
+          (1|redData$recoded_id), na.action=na.exclude)
+
+summary(mod1)
+anova(mod1)
+
+
+
+
+```
+
+# Productive lifespan
+
+```{r}
+
+
+# statistical tests for normal distribution of RTL measurements
+shapiro.test(as.numeric(paste(uDeadData$herd_life)))
+ks.test(as.numeric(paste(uDeadData$herd_life)), pnorm)
+qqnorm(as.numeric(paste(uDeadData$herd_life)))
+```
+
+Investigate the effect of average telomere length over life on productive life span:
+
+```{r}
+produc <-as.numeric(paste(uDeadData$amp_305_lactation))
+
+mod2 <- glm(as.numeric(paste(uDeadData$herd_life)) ~ 
+            uDeadData$average_resid + 
+            produc)
+
+summary(mod2)
+
+
+```
+
+Average telomere length over life is not significantly correlated with productive lifespan. But milk productivity correlates with productive lifespan (animals that live for longer have more opportunity to produce more. But it is an average milk productivity measurement which could also mean that animals that are more productive are kept for longer in the herd)
+
+
+
+
+Average telomere change over life is associated with productive lifespan. 
+
+
+Repeat analysis for animals with more than two samples:
+uDeadDataMore2
+
+```{r}
+
+redDeadMore2 <- subset(u_more_2, u_more_2$herd_life != "NULL")
+uDeadDataMore2 <- redDeadMore2[!duplicated(redDeadMore2$recoded_id),]
+
+
+product <- as.numeric(paste(uDeadDataMore2$amp_305_lactation))
+mod2 <- glm(as.numeric(paste(uDeadDataMore2$herd_life)) ~ 
+            uDeadDataMore2$average_resid +
+            product)
+            
+summary(mod2)
+
+```
+
+
+
+```{r}
+mod3a <- glm(as.numeric(paste(uDeadDataMore2$herd_life)) ~ 
+              as.numeric(paste(uDeadDataMore2$rltl_change)) +
+              product)
+
+summary(mod3a)
+AIC(mod3a)
+```
+
+```{r}
+mod3b <- glm(as.numeric(paste(uDeadDataMore2$herd_life)) ~ 
+              as.numeric(paste(uDeadDataMore2$abs_rltl_change)) + 
+              product)
+summary(mod3b)           
+AIC(mod3b)
+
+AIC(mod3b)-AIC(mod3a)
+
+```
+
+```{r}
+
+#All together
+mod3c <- glm(as.numeric(paste(uDeadDataMore2$herd_life)) ~ 
+          as.numeric(paste(uDeadDataMore2$rltl_change)) + 
+          as.numeric(paste(uDeadDataMore2$abs_rltl_change)) + 
+          uDeadDataMore2$average_resid +product)
+             
+
+summary(mod3c)
+
+```
+
+```{r}
+mod3d <- glm(as.numeric(paste(uDeadDataMore2$herd_life)) ~ 
+              as.numeric(paste(uDeadDataMore2$rltl_change)) + 
+              as.numeric(paste(uDeadDataMore2$abs_rltl_change)) + 
+              product)
+             
+
+summary(mod3d)
+```
+
+
+
+#### Cox proportional hazard model of productive lifespan with average lifetime RLTL as predictor 
+
+```{r}
+
+coxFit <- coxph(Surv(coxData$TimeMeasure, coxData$Event == 1) ~ 
+                coxData$average_resid)
+
+summary(coxFit)
+
+summary(coxFit)$logtest["pvalue"]
+
+```
+
+##### Change to discrete scale to enable plotting
+```{r}
+### discrete scale
+
+coxFit <- coxph(Surv(coxData$TimeMeasure, coxData$Event == 1) ~ 
+            coxData$average_resid_3G)
+summary(coxFit)
+
+
+```
+
+
+
+#### Simple correlations of herd life with lifetime RLTL measures
+
+They show the same as Cox proportional hazard models. 
+```{r}
+dData <- subset(data, data$herd_life != "NULL")
+cor.test(as.numeric(paste(dData$herd_life)), dData$abs_rltl_change)
+
+cor.test(as.numeric(paste(dData$herd_life)), dData$rltl_change)
+
+cor.test(as.numeric(paste(dData$herd_life)), dData$average_resid)
+```
+
+
+
+```{r}
+tert2 <- ggplot(coxData, aes(
+  x = as.factor(coxData$abs_rltl_change_3G),
+  y = abs_rltl_change,
+  colour = as.factor(coxData$abs_rltl_change_3G)
+)) +
+  geom_boxplot() +
+  xlab("Mean absolute RLTL change tertile") +
+  ylab("Mean absolute RLTL change") +
+  theme_light(20) +
+  geom_jitter() +
+  scale_color_manual(values = mycoloursP[35:40]) +
+  theme(legend.position = "none")
+
+tert3 <- ggplot(coxData, aes(
+  x = as.factor(coxData$rltl_change_3G),
+  y = rltl_change,
+  colour = as.factor(coxData$rltl_change_3G)
+)) +
+  geom_boxplot() +
+  xlab("Mean RLTL change tertile") +
+  ylab("Mean RLTL change") +
+  theme_light(20) +
+  geom_jitter() +
+  scale_color_manual(values = mycoloursP[10:40]) +
+  theme(legend.position = "none")
+
+tert4 <- ggplot(coxData, aes(
+  x = as.factor(coxData$average_resid_3G),
+  y = average_resid,
+  colour = as.factor(coxData$average_resid_3G)
+)) +
+  geom_boxplot() +
+  xlab("Mean RLTL tertile") +
+  ylab("Mean RLTL") +
+  theme_light(20) +
+  geom_jitter() +
+  scale_color_manual(values = mycoloursP[5:40]) +
+  theme(legend.position = "none")
+```
+
+```{r, fig.width = 10, fig.height = 3}
+
+grid.arrange(tert4, tert2, tert3, ncol = 3)
+```
+
+
+
+
+
+```{r, fig.width=8, fig.height= 3}
+
+
+surv_plotlist<-list()
+surv_plotlist[[1]] <- meanRLTL
+surv_plotlist[[2]] <- mean_abs_rltl_change
+surv_plotlist[[3]] <- mean_rltl_change
+
+
+
+print(arrange_ggsurvplots(surv_plotlist, print = TRUE, ncol = 3, nrow = 1))
+
+
+```
+
+
+
+
+#### RLTL at the age of 1 year and productive lifespan
+```{r}
+
+
+coxFit <- coxph(Surv(coxData$TimeMeasure, coxData$Event == 1)~coxData$av_rltl_1_res)
+
+summary(coxFit)
+
+```
+
+#### All three measures of lifetime RLTL dynamics and productive lifespan
+
+```{e}
+coxFit <- coxph(Surv(coxData$TimeMeasure, coxData$Event == 1) ~ 
+            coxData$rltl_change + 
+            coxData$average_resid + 
+            coxData$abs_rltl_change)
+
+summary(coxFit)
+
+```
+
+
+
+#### Including average milk production
+
+
+```{r}
+coxFit <- coxph(Surv(coxDataR$TimeMeasure, coxDataR$Event == 1) ~ 
+            coxDataR$average_resid + 
+            as.numeric(paste(coxDataR$amp_305_lactation)))
+
+summary(coxFit)
+
+```
+
+
+```{r}
+coxFit <- coxph(Surv(coxDataR$TimeMeasure, coxDataR$Event == 1) ~ 
+            coxDataR$abs_rltl_change + 
+            as.numeric(paste(coxDataR$amp_305_lactation)))
+
+summary(coxFit)
+
+```
+
+
+```{r}
+coxFit <- coxph(Surv(coxDataR$TimeMeasure, coxDataR$Event == 1) ~ 
+            coxDataR$rltl_change + 
+            as.numeric(paste(coxDataR$amp_305_lactation)))
+
+summary(coxFit)
+
+```
+
+##### test RLTL at the age of 1 year in the same model as mean RLTL change
+```{r}
+coxFit <- coxph(Surv(coxDataR$TimeMeasure, coxDataR$Event == 1) ~ 
+            coxDataR$rltl_change + 
+            coxDataR$av_rltl_1_res + 
+            as.numeric(paste(coxDataR$amp_305_lactation)))
+
+summary(coxFit)
+
+```
+
+
+
+###### All three measures of lifetime RLTL dynamics in the same model including milk productivity measure:
+```{r}
+
+coxFit <- coxph(Surv(coxDataR$TimeMeasure, coxDataR$Event == 1) ~ 
+          coxDataR$rltl_change + 
+          coxDataR$average_resid +
+          coxDataR$abs_rltl_change + 
+          as.numeric(paste(coxDataR$amp_305_lactation)))
+
+summary(coxFit)
+
+```
+
+
+
+
+
+```{r}
+summary(as.numeric(paste(red_data_l_new$diff_rltl_res)))
+    
+summary(as.numeric(paste(data$diff_rltl_res)))
+```  
+
+
+WHAT IS THAT BELOW??
+```{r}
+
+u_red_data_l_new <- red_data_l_new[!duplicated(red_data_l_new$recoded_id), ]
+
+
+coxDataL <- data.frame(recoded_id = u_red_data_l_new$recoded_id, 
+                        dob = u_red_data_l_new$dob, 
+                        herd_life = u_red_data_l_new$herd_life, 
+                        cull_date = u_red_data_l_new$cull_date, 
+                        average_resid = u_red_data_l_new$average_resid, 
+                        rltl_change = u_red_data_l_new$rltl_change, 
+                        abs_rltl_change = u_red_data_l_new$abs_rltl_change, 
+                        amp_305_lactation = u_red_data_l_new$amp_305_lactation)
+
+
+coxDataL$CutoffDate <- "01/01/2017"
+coxDataL$Event <- ifelse(coxDataL$cull_date == "NULL", 0, 1)
+coxDataL$TimeMeasure <- ifelse(coxDataL$Event == 0, 
+                                as.Date(coxDataL$CutoffDate, "%d/%m/%Y") - 
+                                as.Date(coxDataL$dob, "%d/%m/%Y"), 
+                                as.numeric(paste(coxDataL$herd_life)))
+
+coxFit <- coxph(Surv(coxDataL$TimeMeasure, coxDataL$Event == 1) ~ coxDataL$average_resid)
+
+summary(coxFit)
+
+```
+
+```{r}
+coxFit <- coxph(Surv(coxDataL$TimeMeasure, coxDataL$Event == 1)~coxDataL$abs_rltl_change)
+
+summary(coxFit)
+
+```
+
+```{r}
+coxFit <- coxph(Surv(coxDataL$TimeMeasure, coxDataL$Event == 1)~coxDataL$rltl_change)
+
+summary(coxFit)
+
+```
+
+#now without first measurement but including milk productivity
+
+#now I will include average milk production, TEL sample number was tested, but removed from the models because it was not statistically associated with productive lifespan
+
+```{r}
+coxDataRL<-subset(coxDataL, coxDataL$amp_305_lactation != "NULL")
+
+#coxDataRL<-merge(coxDataRL, maxSN, by = "recoded_id")
+
+
+coxFit<-coxph(Surv(coxDataRL$TimeMeasure, coxDataRL$Event == 1)~coxDataRL$average_resid+ as.numeric(paste(coxDataRL$amp_305_lactation)))
+
+summary(coxFit)
+```
+
+
+```{r}
+
+coxFit<-coxph(Surv(coxDataRL$TimeMeasure, coxDataRL$Event == 1)~coxDataRL$abs_rltl_change+ as.numeric(paste(coxDataRL$amp_305_lactation)))
+
+summary(coxFit)
+```
+
+```{r}
+
+coxFit<-coxph(Surv(coxDataRL$TimeMeasure, coxDataRL$Event == 1)~coxDataRL$rltl_change + as.numeric(paste(coxDataRL$amp_305_lactation)))
+
+summary(coxFit)
+
+```
+
+
+```{}
+coxFit<-coxph(Surv(coxDataRL$TimeMeasure, coxDataRL$Event == 1)~coxDataRL$rltl_change + coxDataRL$abs_rltl_change+ coxDataRL$average_resid+ as.numeric(paste(coxDataRL$amp_305_lactation)))
+
+summary(coxFit)
+
+
+```
+
+See if relationship remains statistically significant when only animals with more than 2 samples are included in the analysis
+
+```{r}
+
+
+
+coxData2<-data.frame(recoded_id=u_more_2$recoded_id, dob = u_more_2$dob, herd_life = u_more_2$herd_life, cull_date = u_more_2$cull_date, average_resid_M2 = u_more_2$average_resid_M2, rltl_change_M2 = u_more_2$rltl_change_M2, abs_rltl_change_M2 = u_more_2$abs_rltl_change_M2, amp_305_lactation = u_more_2$amp_305_lactation, av_rltl_1_res = u_more_2$av_rltl_1_res)
+
+
+
+
+coxData2$CutoffDate<-"01/01/2017"
+coxData2$Event<-ifelse(coxData2$cull_date=="NULL", 0, 1)
+coxData2$TimeMeasure<-ifelse(coxData2$Event==0, as.Date(coxData2$CutoffDate, "%d/%m/%Y")- as.Date(coxData2$dob, "%d/%m/%Y"), as.numeric(paste(coxData2$herd_life)))
+
+
+
+coxData2$average_resid_3G<-ntile(coxData2$average_resid_M2,3)
+coxData2$rltl_change_3G<-ntile(coxData2$rltl_change_M2,3)
+coxData2$abs_rltl_change_3G<-ntile(coxData2$abs_rltl_change_M2,3)
+
+# models:
+##Average lifetime telomere length
+### condinuous variable:
+coxFit<-coxph(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$average_resid_M2)
+
+summary(coxFit)
+
+```
+
+
+```{r}
+### discrete scale
+
+coxFit<-coxph(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$average_resid_3G)
+summary(coxFit)
+
+coxFit<-survfit(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$average_resid_3G)
+
+```
+
+```{r}
+
+#### plot results for discrete scale
+
+survp<- ggsurvplot(coxFit, data=coxData2, pval = TRUE, ggtheme = theme_minimal(), risk.table.y.text.col = T, risk.table.y.text = FALSE, legend.labs=c("Tertile 1 (shortest mean RLTL)", "Tertile 2", "Tertile 3 (longest mean RLTL)"))+theme_survminer(40)
+
+survp
+
+
+```
+
+Mean RLTL change 
+```{r}
+coxFit<-coxph(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$rltl_change_M2)
+
+summary(coxFit)
+
+```
+
+
+```{r}
+### discrete scale
+
+coxFit<-coxph(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$rltl_change_3G)
+summary(coxFit)
+
+coxFit<-survfit(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$rltl_change_3G)
+
+```
+
+```{r}
+
+#### plot results for discrete scale
+
+survp<- ggsurvplot(coxFit, data=coxData2, pval = TRUE, ggtheme = theme_minimal(), risk.table.y.text.col = T, risk.table.y.text = FALSE, legend.labs=c("Tertile 1 (most RLTL shortening)", "Tertile 2", "Tertile 3 (least RLTL shortening)"))+theme_survminer(40)
+
+survp
+
+```
+
+
+mean absolute RLTL change
+
+```{r}
+coxFit<-coxph(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$abs_rltl_change_M2)
+
+summary(coxFit)
+
+```
+
+
+```{r}
+### discrete scale
+
+coxFit<-coxph(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$abs_rltl_change_3G)
+summary(coxFit)
+
+coxFit<-survfit(Surv(coxData2$TimeMeasure, coxData2$Event == 1)~coxData2$abs_rltl_change_3G)
+
+```
+
+```{r}
+
+#### plot results for discrete scale
+
+survp<- ggsurvplot(coxFit, data=coxData2, pval = TRUE, ggtheme = theme_minimal(), risk.table.y.text.col = T, risk.table.y.text = FALSE, legend.labs=c("Tertile 1 (least absolute RLTL change)", "Tertile 2", "Tertile 3 (most absolute RLTL change)"))+theme_survminer(40)
+
+survp
+
+```
+
+
+
+Some more figures:
+
+```{r}
+
+variable_1<-as.numeric(paste(data$sample_interval))
+meanVar_1<-mean(variable_1, na.rm= TRUE)
+sdVar<-sd(variable_1, na.rm=TRUE)
+
+samp_int_p<-ggplot(data, aes(x = variable_1)) + 
+	geom_histogram(colour= "black", fill = mycoloursP[7]) + xlab("Sample interval in days") +   geom_vline(xintercept= meanVar_1,  colour="red")+
+  theme_classic(20)
+
+samp_int_p
+```
+
+
+```{r}
+
+uData<-data[!duplicated(data$recoded_id),]
+
+
+variable2<-as.factor(paste(uData$birth_year))
+
+yob<-ggplot(uData, aes(x = variable2)) + 
+	geom_bar(colour= "black", fill = mycoloursP[8]) + xlab("Birth year")+ theme_classic(20)
+
+yob
+```
+
+
+```{r}
+#Average milk production
+
+variable3<-as.numeric(paste(uData$amp_305_lactation))
+meanVar3<-mean(variable3, na.rm= TRUE)
+sdVar<-sd(variable3, na.rm=TRUE)
+
+milk_prod<-ggplot(uData, aes(x = variable3)) + 
+	geom_histogram(colour= "black", fill = mycoloursP[9]) + xlab("Average milk production") +   geom_vline(xintercept= meanVar3,  colour="red")+
+  theme_classic(20)
+
+milk_prod
+```
+
+```{r, fig.width = 8, fig.height = 3}
+grid.arrange(samp_int_p, yob, milk_prod, ncol = 3)
+
+
+```
+
+```{r, fig.width = 10}
+grid.arrange(hist2, samp_int_p, milk_prod, prod_lsp_plot,  ncol = 2 )
+
+```
+
+
+```{r}
+# cull reasons
+
+variable<-as.factor(paste(uDeadData$cull_reason))
+
+ggplot(uDeadData, aes(x = variable)) + 
+	geom_bar(colour= "black", fill = mycoloursP[10]) + xlab("Cull reason") +
+  theme_classic(10)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+  
+```
+
+
+```{r}
+# cull category
+
+
+variable<-as.factor(paste(uDeadData$cull_category))
+
+variable <- factor(variable, levels = c("Fertility & Reproduction", 
+                                        "Mastitis" , 
+                                        "Lameness", 
+                                        "Died", 
+                                        "Poor milk yield", 
+                                        "Accident",
+                                        "Herd management",
+                                        "Reason unknown"))
+
+uDeadData$cull_disease <- ifelse(uDeadData$cull_category == "Herd management" |
+                                   uDeadData$cull_category == "Accident"|
+                                   uDeadData$cull_category == "Reason unknown",
+                                 "not exclusively health related", "health related")
+
+cull_p <- ggplot(uDeadData, aes(x = variable, fill = cull_disease)) + 
+	geom_bar(colour= "black") + xlab("Cull reason") +
+  theme_classic(10)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_fill_manual(values = mycoloursP[8:40])+
+  labs(fill = "Cull category")
+
+
+ cull_p 
+```
+
+
+
+```{r}
+# fertility events
+newdata <- subset(uData, uData$health_event_fertil_all != "NULL") 
+variable_f<-as.integer(paste(newdata$health_event_fertil_all))
+
+fert<- ggplot(newdata, aes(x = variable_f)) + 
+	geom_bar(colour= "black", fill = mycoloursP[11]) + xlab("Fertility events")+
+  theme_classic(20)+
+  scale_x_continuous(breaks=c(0:12))
+```
+
+```{r}
+#mastitis events
+newdata <- subset(uData, uData$health_event_mastitis_all != "NULL") 
+variable_m<-as.integer(paste(newdata$health_event_mastitis_all))
+
+mast<- ggplot(newdata, aes(x = variable_m)) + 
+	geom_bar(colour= "black", fill = mycoloursP[12]) + xlab("Mastitis events")+
+  theme_classic(20)+
+  scale_x_continuous(breaks=c(0:8))
+
+#mast
+```
+
+```{r}
+#lameness events
+newdata <- subset(uData, uData$health_event_lame_all != "NULL") 
+variable_l<-as.integer(paste(newdata$health_event_lame_all))
+
+lame<- ggplot(newdata, aes(x = variable_l)) + 
+	geom_bar(colour= "black", fill = mycoloursP[13]) + xlab("Lameness events")+
+  theme_classic(20)+
+  scale_x_continuous(breaks=c(0:11))
+
+```
+
+
+```{r, fig.width = 8, fig.height = 3}
+grid.arrange(fert, mast, lame, ncol = 3)
+
+
+```
+
+
+
+# saving data
+
+```{r}
+
+#save tables:
+tableS1<-as.data.frame(round(coef(summary(init_mod)),3))
+tableS2<-as.data.frame(anova(init_mod))
+
+tableS1
+tableS2
+
+#save tables:
+tableS3<-as.data.frame(round(coef(summary(late_mod)),3))
+tableS4<-as.data.frame(anova(late_mod))
+
+tableS3
+tableS4
+
+#save tables:
+tableS5<-as.data.frame(round(coef(summary(red_mod)),3))
+tableS6<-as.data.frame(anova(red_mod))
+
+tableS5
+tableS6
+
+
+#save tables:
+tableS7<-as.data.frame(round(coef(summary(red_mod_fac)),3))
+tableS8<-as.data.frame(anova(red_mod_fac))
+
+tableS7
+tableS8
+
+```
+
+```{r, echo = FALSE}
+
+TableS9<-as.data.frame(round(coef(summary(prod_mod)),3))
+TableS9
+
+
+TableS10<-as.data.frame(anova(prod_mod))
+TableS10
+```
+
+
+
+
+## Test distribution of sample date
+
+
+
+Complete dataset:
+
+
+```{r}
+date_table<- table(data$sample_date)
+
+date_table <- setNames(data.frame(table(data$sample_date)),c("Date","Count"))
+  
+date_table$Date<-as.Date(date_table$Date, "%d/%m/%Y")    
+date_table$Count<-as.numeric(paste(date_table$Count))
+
+
+ 
+```
+
+
+```{r, fig.width = 8, fig.height = 2}
+
+
+
+ggplot(date_table, aes( x = Date, y= Count))  + geom_line(colour= mycoloursP[19]) + geom_point(colour = mycoloursP[18]) +theme_bw() +
+  scale_x_date(date_labels="%b", date_breaks="month", expand=c(0,0)) +
+  facet_grid(~ year(Date), space="free_x", scales="free_x", switch="x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(strip.placement = "outside",
+        strip.background = element_rect(fill=NA,colour="grey50"),
+       panel.spacing=unit(0,"cm"))
+
+
+
+```
+
+# Effect of health events on lifelong telomere length dynamics
+
+```{r}
+
+lame_mod<- lm(uDeadData$abs_rltl_change ~ as.numeric(paste(uDeadData$health_event_lame_all)))
+
+summary(lame_mod)
+
+
+lame_mod_RLTL<- lm(uDeadData$average_resid ~ as.numeric(paste(uDeadData$health_event_lame_all)))
+
+summary(lame_mod_RLTL)
+
+
+lame_mod_RLTLch<- lm(uDeadData$rltl_change ~ as.numeric(paste(uDeadData$health_event_lame_all)))
+
+summary(lame_mod_RLTLch)
+```
+
+```{r}
+
+mast_mod<- lm(uDeadData$abs_rltl_change ~ as.numeric(paste(uDeadData$health_event_mastitis_all)))
+
+summary(mast_mod)
+
+
+mast_mod_RLTL<- lm(uDeadData$average_resid ~ as.numeric(paste(uDeadData$health_event_mastitis_all)))
+
+summary(mast_mod_RLTL)
+
+
+mast_mod_RLTLch<- lm(uDeadData$rltl_change ~ as.numeric(paste(uDeadData$health_event_mastitis_all)))
+
+summary(mast_mod_RLTLch)
+```
+
+
+
+```{r}
+uDeadData$comb_mast_lame <- as.numeric(paste(uDeadData$health_event_mastitis_all)) +
+   as.numeric(paste(uDeadData$health_event_lame_all))
+
+comb_mod<- lm(uDeadData$abs_rltl_change ~ uDeadData$comb_mast_lame)
+
+summary(comb_mod)
+```
+
+
+```{r}
+
+comb_mod_RLTL<- lm(uDeadData$average_resid ~ uDeadData$comb_mast_lame)
+
+summary(comb_mod_RLTL)
+```
+
+
+```{r}
+
+comb_mod_RLTLch<- lm(uDeadData$rltl_change ~ uDeadData$comb_mast_lame)
+
+summary(comb_mod_RLTLch)
+```
+
+
+
+Less telomere attrition correlates with more fertility events. While mastatis and lameness events are negative, fertility events include positive outcomes such as an animal seen to show signs of fertility and having a calf. 
+
+```{r}
+
+fer_mod<- lm(uDeadData$abs_rltl_change ~ as.numeric(paste(uDeadData$health_event_fertil_all)))
+
+summary(fer_mod)
+
+
+fer_mod_RLTL<- lm(uDeadData$average_resid ~ as.numeric(paste(uDeadData$health_event_fertil_all)))
+
+summary(fer_mod_RLTL)
+
+
+fer_mod_RLTLch<- lm(uDeadData$rltl_change ~ as.numeric(paste(uDeadData$health_event_fertil_all)))
+
+summary(fer_mod_RLTLch)
+
+
+ggplot(uDeadData, aes(x= as.numeric(paste(uDeadData$health_event_fertil_all)), y=  rltl_change)) + geom_point()
+```
+# Fig. Initial change data
+
+```{r}
+in_df<-data.frame(recoded_id = init_change_dat$recoded_id, RLTL = init_change_dat$RLTL0, age= 0, year= init_change_dat$sample_year0)   
+in_df2<-data.frame(recoded_id = init_change_dat$recoded_id, RLTL = init_change_dat$RLTL1, age= 1, year= init_change_dat$sample_year)   
+
+init_df<-rbind(in_df, in_df2)
+
+in_plot1<-ggplot(data = init_df, aes(x = as.factor(init_df$age), y = RLTL, group = recoded_id, colour = recoded_id))+geom_point()+ geom_line()+ 
+  xlab("Age in years") + ylab("RLTL residuals") + theme_classic(20)+ theme(legend.position = "none") 
+
+```
+# Fig. Initial change data over year
+
+```{r}
+
+in_plot2<-ggplot(data = init_df, aes(x = as.factor(init_df$year), y = RLTL, group = recoded_id, colour = recoded_id))+geom_point()+ geom_line()+ 
+  xlab("Age in years") + ylab("RLTL residuals") + theme_classic(20)+ theme(legend.position = "none")
+
+```
+
+
+```{r, fig.width = 7, fig.height = 3}
+
+grid.arrange(in_plot1, in_plot2, ncol = 2)
+
+```
+
+
+
+
+
+# weather plots
+
+
+```{r, fig.width = 10, fig.height = 5}
+weath_plot_dat<-read.csv(here::here("data", "eskdalemuirdata_red_plot.csv"))
+                         
+                         
+weath_plot_dat<-subset(weath_plot_dat, weath_plot_dat$yyyy > 2005)
+weath_plot_dat<-subset(weath_plot_dat, weath_plot_dat$yyyy < 2016)
+
+weath_plot_dat$mm <- ifelse(weath_plot_dat$mm < 10, paste0("0", weath_plot_dat$mm), weath_plot_dat$mm)
+weath_plot_dat$date<-paste(weath_plot_dat$yyyy, weath_plot_dat$mm, "01", sep = "-")
+weath_plot_dat$date<- as.Date(weath_plot_dat$date)
+
+weath_plot_dat$tmax_degC<-as.numeric(paste(weath_plot_dat$tmax_degC))
+
+
+w1<-ggplot(weath_plot_dat, aes( x = date, y= tmax_degC))  + geom_line(colour= mycoloursP[20], size = 2) + geom_point(colour = mycoloursP[21], size = 2) +theme_bw(20) +
+  ylab("Maximum temperature °C")+
+  xlab("Measurement time point")+
+  scale_x_date(date_labels="%b", date_breaks="month", expand=c(0,0)) +
+  facet_grid(~ year(date), space="free_x", scales="free_x", switch="x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(strip.placement = "outside",
+        strip.background = element_rect(fill=NA,colour="grey50"),
+       panel.spacing=unit(0.4,"cm"))
+
+```
+
+```{r, fig.width = 10, fig.height = 5}
+
+weath_plot_dat$tmin_degC<-as.numeric(paste(weath_plot_dat$tmin_degC))
+
+w2<-ggplot(weath_plot_dat, aes( x = date, y= tmin_degC))  + geom_line(colour= mycoloursP[22], size = 2) + geom_point(colour = mycoloursP[23], size = 2) +theme_bw(20) +
+  ylab("Minimum temperature °C")+
+  xlab("Measurement time point")+
+  scale_x_date(date_labels="%b", date_breaks="month", expand=c(0,0)) +
+  facet_grid(~ year(date), space="free_x", scales="free_x", switch="x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(strip.placement = "outside",
+        strip.background = element_rect(fill=NA,colour="grey50"),
+       panel.spacing=unit(0.4,"cm"))
+
+```
+
+```{r, fig.width = 10, fig.height = 5}
+
+weath_plot_dat$af_days<-as.numeric(paste(weath_plot_dat$af_days))
+
+w3<-ggplot(weath_plot_dat, aes( x = date, y= af_days))  + geom_line(colour= mycoloursP[24], size = 2) + geom_point(colour = mycoloursP[25], size = 2) +theme_bw(20) +
+  ylab("Air frost days")+
+  xlab("Measurement time point")+
+  scale_x_date(date_labels="%b", date_breaks="month", expand=c(0,0)) +
+  facet_grid(~ year(date), space="free_x", scales="free_x", switch="x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(strip.placement = "outside",
+        strip.background = element_rect(fill=NA,colour="grey50"),
+       panel.spacing=unit(0.4,"cm"))
+
+```
+
+```{r, fig.width = 10, fig.height = 5}
+
+weath_plot_dat$sun_hours_c<-as.numeric(paste(substr(weath_plot_dat$sun_hours,1,nchar(weath_plot_dat$sun_hours)-1)))
+
+w4<-ggplot(weath_plot_dat, aes( x = date, y= sun_hours_c))  + geom_line(colour= mycoloursP[26], size = 2) + geom_point(colour = mycoloursP[27], size = 2) +theme_bw(20) +
+  ylab("Sun hours per")+
+  xlab("Measurement time point")+
+  scale_x_date(date_labels="%b", date_breaks="month", expand=c(0,0)) +
+  facet_grid(~ year(date), space="free_x", scales="free_x", switch="x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(strip.placement = "outside",
+        strip.background = element_rect(fill=NA,colour="grey50"),
+       panel.spacing=unit(0.4,"cm"))
+
+```
+
+
+```{r, fig.width = 10, fig.height = 5}
+
+weath_plot_dat$rain_mm<-as.numeric(paste(weath_plot_dat$rain_mm))
+
+w5<-ggplot(weath_plot_dat, aes( x = date, y= rain_mm))  + geom_line(colour= mycoloursP[28], size = 2) + geom_point(colour = mycoloursP[29], size = 2) +theme_bw(20) +
+  ylab("Rain in mm")+
+  xlab("Measurement time point")+
+  scale_x_date(date_labels="%b", date_breaks="month", expand=c(0,0)) +
+  facet_grid(~ year(date), space="free_x", scales="free_x", switch="x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  theme(strip.placement = "outside",
+        strip.background = element_rect(fill=NA,colour="grey50"),
+       panel.spacing=unit(0.4,"cm"))
+
+```
+
+
+```{r, fig.height = 20, fig.width = 8}
+
+grid.arrange(w1, w2, w3, w4, w5, ncol = 1)
+
+```
+
+
+
+```{r}
+sessionInfo()
+
+```
