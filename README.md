@@ -11,7 +11,7 @@ https://www.nature.com/articles/s41598-021-84984-2
 
 # About the data
 
-The main data file containing telomere data is LongTelomereDataCattle.csv \
+The main data file containing telomere data is LongTelomereDataCattle.csv 
 
 This dataset includes:\
 recoded_id = anonymous animal ID\
@@ -49,14 +49,14 @@ AgeGroup = young vs. old\
 av_rltl_1_res = rltl at the approximate age of 1 year, corrected for qPCR plate and row\
 SamplesPerAnimal = number of telomere measurements per animal\	
 Animal_No = another animal identifyer\	
-atrr_rate_per_year = rltl change rate per year\
+atrr_rate_per_year = rltl change rate per year
 
 
-I opted for preparing different input data outside of the main .Rmd file to make it less confusing. \
+I opted for preparing different input data outside of the main .Rmd file to make it less confusing. 
 
-Survival data can be found in cox_data.csv.\
+Survival data can be found in cox_data.csv.
 
-The main weather data file is eskdalemuirdata_red_sampleYear.csv.\
+The main weather data file is eskdalemuirdata_red_sampleYear.csv.
 
-Datasets were not simply sub-setted but mean lifelong relative leukocyte telomere length) measures (mean RLTL, mean RLTL change, mean absolute RLTL change) had to be calculated again for the subsetted dataset excluding those time points that were not sought to be considered.\
+Datasets were not simply sub-setted but mean lifelong relative leukocyte telomere length) measures (mean RLTL, mean RLTL change, mean absolute RLTL change) had to be calculated again for the subsetted dataset excluding those time points that were not sought to be considered.
 
