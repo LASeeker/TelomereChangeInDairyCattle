@@ -47,11 +47,9 @@ rltl_change	= mean change in rltl across all of the animal's rltl measurements\
 abs_rltl_change	= mean absolute change in rltl across all of the animal's rltl measurements\
 AgeGroup = young vs. old\
 av_rltl_1_res = rltl at the approximate age of 1 year, corrected for qPCR plate and row\
-SamplesPerAnimal = number of telomere measurements per animal 
-
-Animal_No = another animal identifyer 
-
-atrr_rate_per_year = rltl change rate per year
+SamplesPerAnimal = number of telomere measurements per animal \
+Animal_No = another animal identifyer \
+atrr_rate_per_year = rltl change rate per year\
 
 
 
